@@ -2,6 +2,8 @@
 
 ![Licença: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)
 
+`#gamer` `#gaming` `#games` `#jogos` `#gamebackup` `#gamecollection` `#ps4` `#ps4pkg` `#pkg` `#zip` `#rar` `#iso` `#7z` `#fileextractor` `#extratoruniversal` `#extrairtudo` `#python` `#tkinter` `#linux` `#kde` `#gameslibrary` `#gameinstaller` `#ultrafast` `#backup` `#arquivos`
+
 Aplicativo Tkinter único para extrair **ZIP, RAR, ISO, 7z, TAR, CAB e ARJ**, além de **PKG de PS4**, com abas independentes, fila de arquivos, progresso detalhado (arquivos, bytes e ETA), senha, modo **Ultra rápida**, criação de pasta de destino e arrastar e soltar.
 
 ## Funcionalidades
@@ -33,7 +35,7 @@ cd extrator-universal-com-pkg
 ./install.sh
 ```
 
-Instalação manual (alternativa): crie `~/.local/share/extrator-universal-com-pkg`,
+Instalação manual (alternativa): crie `~/.local/share/extrair-universal`,
 `~/.local/bin` e `~/.local/share/applications`, copie `app.py` e `core.py` para o
 primeiro diretório, copie o wrapper de inicialização para
 `~/.local/bin/extrair-tudo` e o arquivo `.desktop` para
