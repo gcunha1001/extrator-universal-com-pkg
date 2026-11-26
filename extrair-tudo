@@ -1,0 +1,6 @@
+#!/bin/sh
+# Evita visuais ARGB no XWayland/KWin (janelas invisíveis ou translúcidas).
+XLIB_SKIP_ARGB_VISUALS=1
+export XLIB_SKIP_ARGB_VISUALS
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "${PYTHON:-python3}" "$SCRIPT_DIR/app.py" "$@"

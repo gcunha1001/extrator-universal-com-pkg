@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+erros.log
+*.log
+.venv/
+venv/
+.DS_Store
+tests/_tmp/
+*.zip
+*.rar
+*.7z
+*.iso
+*.pkg

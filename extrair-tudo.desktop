@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Extrair Tudo
+GenericName=Central de Extração
+Comment=Extrair ZIP, RAR, ISO, outros arquivos e PKG de PS4 com todos os motores
+Exec=extrair-tudo
+TryExec=extrair-tudo
+Icon=archive-extract
+Terminal=false
+Categories=Utility;
+Keywords=zip;rar;iso;7z;pkg;extract;extrair;
+StartupNotify=true
+StartupWMClass=extrair-tudo
