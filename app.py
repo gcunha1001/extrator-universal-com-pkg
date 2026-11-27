@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Interface única em tema claro e sóbrio: arquivos (ZIP/RAR/ISO) e PKG."""
 
+import json
 import os
 import re
 import shutil
@@ -16,6 +17,10 @@ ROOT = Path(__file__).resolve().parent
 LOG_FILE = (
     Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local/state")
     / "extrair-tudo" / "erros.log"
+)
+CHECKPOINT_FILE = (
+    Path(os.environ.get("XDG_STATE_HOME", "") or Path.home() / ".local/state")
+    / "extrair-tudo" / "checkpoint.json"
 )
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
@@ -173,6 +178,8 @@ class QueueTab:
         self.running = False
         self.probing = 0
         self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.pause_event.set()
         self.current_job = None
         self.job_started = 0.0
         self._eta_after = None
@@ -292,6 +299,9 @@ class QueueTab:
         self.cancel_button = ttk.Button(actions, text="Cancelar",
                                         command=self._cancel, state="disabled")
         self.cancel_button.pack(side="right", padx=6)
+        self.pause_button = ttk.Button(actions, text="Pausar",
+                                       command=self._pause, state="disabled")
+        self.pause_button.pack(side="right", padx=6)
         self.extract_button = ttk.Button(actions, text="Extrair",
                                          style="Accent.TButton",
                                          command=self._start_extraction)
@@ -467,6 +477,9 @@ class QueueTab:
         self.extract_button.configure(state=state)
         self.remove_button.configure(state=state)
         self.clear_button.configure(state=state)
+        if hasattr(self, "pause_button"):
+            self.pause_button.configure(
+                state="normal" if self.running else "disabled")
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -626,12 +639,23 @@ class QueueTab:
             return
         self.running = True
         self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.pause_event.set()
         self._sync_buttons()
         self.cancel_button.configure(state="normal")
+        self.pause_button.configure(state="normal", text="Pausar")
         args = (output, engine, self.app.password_var.get(), self.app.fast_var.get())
         threading.Thread(target=self._worker, args=args, daemon=True).start()
 
     def _worker(self, output, engine, password, fast):
+        if self.mode == "pkg":
+            def _tracer(frame, event, arg):
+                while not self.pause_event.is_set():
+                    time.sleep(0.1)
+                    if self.cancel_event.is_set():
+                        raise ExtractionCancelled("Extracao cancelada.")
+                return _tracer
+            sys.settrace(_tracer)
         for job in list(self.jobs):
             if self.cancel_event.is_set():
                 break
@@ -684,6 +708,19 @@ class QueueTab:
                 self.ui(lambda: self._log(message))
 
             self.ui(start)
+            resume = bool(job.get("resume"))
+            resume_target = job.get("resume_target")
+            target = Path(resume_target) if resume_target else None
+            if not resume:
+                try:
+                    target = core.reserve_target(output, job["path"])
+                except Exception as error:
+                    target = None
+            if target is not None:
+                job["resume_target"] = str(target)
+            self._save_checkpoint(job, output, target, engine,
+                                  password if self.mode == "files" else None,
+                                  fast)
             try:
                 result = core.extract(
                     job["path"], output,
@@ -692,11 +729,13 @@ class QueueTab:
                     fast=fast, entries=job["entries"],
                     bytes_total=job["bytes_total"],
                     progress=progress, log=log, cancel=self.cancel_event,
+                    resume=resume, target=target, pause=self.pause_event,
                 )
 
                 def done(j=job, r=result):
                     j["result"] = r
                     j["percent"] = 100
+                    self._clear_checkpoint()
                     j["current"] = 100
                     j["files_done"] = j["files_done"] or j["files_total"] or j["entries"]
                     j["bytes_done"] = j["bytes_done"] or j["bytes_total"] or j["bytes"]
@@ -716,6 +755,7 @@ class QueueTab:
                 self.ui(cancelled)
                 break
             except ExtractionError as error:
+                self._clear_checkpoint()
                 message = str(error)
 
                 def failed(j=job, m=message):
@@ -728,7 +768,8 @@ class QueueTab:
                            ("password", "encrypted", "wrong", "senha")):
                         self._log("Dica: informe a senha em Opções e tente novamente.")
                 self.ui(failed)
-            except Exception as error:  # um arquivo nao derruba a fila
+            except Exception as error:
+                self._clear_checkpoint()
                 self.app.log_error(
                     f"Erro inesperado ao extrair {job['path']}:\n{traceback.format_exc()}")
                 def failed_unexpected(j=job, m=str(error)):
@@ -739,13 +780,62 @@ class QueueTab:
                     self._log(f"ERRO inesperado: {m}")
                 self.ui(failed_unexpected)
 
+        if self.mode == "pkg":
+            sys.settrace(None)
         def finish():
             self.running = False
             self._stop_eta()
             self._sync_buttons()
             self.cancel_button.configure(state="disabled")
+            if hasattr(self, "pause_button"):
+                self.pause_button.configure(state="disabled")
             self._log("Fila finalizada.")
         self.ui(finish)
+
+    def _pause(self):
+        if not self.running:
+            return
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            if hasattr(self, "pause_button"):
+                self.pause_button.configure(text="Continuar")
+            self._log("Pausando...")
+            if self.current_job is not None:
+                self.summary_label.configure(text="Pausado")
+        else:
+            self.pause_event.set()
+            if hasattr(self, "pause_button"):
+                self.pause_button.configure(text="Pausar")
+            self._log("Retomando...")
+            if self.current_job is not None:
+                self._update_summary(self.current_job)
+
+    def _save_checkpoint(self, job, output, target, engine, password, fast):
+        try:
+            CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = [{
+                "source": str(job["path"]),
+                "output": str(output),
+                "target": str(target) if target is not None else None,
+                "engine": engine,
+                "password": password,
+                "fast": bool(fast),
+                "mode": self.mode,
+                "entries": int(job.get("entries", 0) or 0),
+                "bytes": int(job.get("bytes", 0) or 0),
+            }]
+            with CHECKPOINT_FILE.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+        except OSError:
+            pass
+
+    def _clear_checkpoint(self):
+        try:
+            CHECKPOINT_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     def _cancel(self):
         if self.running:
@@ -775,6 +865,7 @@ class App:
         self._style()
         self._build()
         self.root.after(50, self._safe_free_space)
+        self.root.after(300, self._check_checkpoint)
 
     def _safe_free_space(self):
         """Protege a consulta de disco se a janela já tiver sido fechada."""
@@ -782,6 +873,69 @@ class App:
             self._update_free_space()
         except (tk.TclError, RuntimeError, OSError):
             pass
+
+    def _clear_checkpoint_global(self):
+        try:
+            CHECKPOINT_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    def _check_checkpoint(self):
+        if not CHECKPOINT_FILE.exists():
+            return
+        try:
+            with CHECKPOINT_FILE.open(encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            self._clear_checkpoint_global()
+            return
+        if not isinstance(data, list) or not data:
+            self._clear_checkpoint_global()
+            return
+        item = data[0]
+        source = Path(item.get("source", ""))
+        target_raw = item.get("target")
+        target = Path(target_raw) if target_raw else None
+        output = Path(item.get("output", ""))
+        if not source.is_file() or target is None or not target.exists():
+            self._clear_checkpoint_global()
+            return
+        if not messagebox.askyesno(
+                "Retomar extração",
+                f"Extração interrompida encontrada:\n{source.name}\n"
+                "Retomar de onde parou?"):
+            self._clear_checkpoint_global()
+            return
+        mode = item.get("mode", "files")
+        tab = self.tabs[0] if mode == "files" else self.tabs[1]
+        job = tab._add_job(source)
+        job["resume"] = True
+        job["resume_target"] = str(target)
+        job["engine"] = item.get("engine", tab.engine_var.get())
+        job["entries"] = int(item.get("entries", 0) or 0)
+        job["bytes"] = int(item.get("bytes", 0) or 0)
+        job["bytes_total"] = job["bytes"]
+        job["status"] = "Aguardando"
+        tab._update_row(job)
+        self.output_var.set(str(output))
+        tab.engine_var.set(item.get("engine", tab.engine_var.get()))
+        password = item.get("password")
+        if password:
+            self.password_var.set(password)
+        self.fast_var.set(bool(item.get("fast", False)))
+        tab.running = True
+        tab.cancel_event = threading.Event()
+        tab.pause_event = threading.Event()
+        tab.pause_event.set()
+        tab._sync_buttons()
+        tab.cancel_button.configure(state="normal")
+        if hasattr(tab, "pause_button"):
+            tab.pause_button.configure(state="normal", text="Pausar")
+        args = (output, tab.engine_var.get(), self.password_var.get(),
+                self.fast_var.get())
+        threading.Thread(target=tab._worker, args=args, daemon=True).start()
 
     # ---------- interface ----------
 

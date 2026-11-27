@@ -8,6 +8,7 @@ import queue
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -167,6 +168,11 @@ def _target_folder(output, source):
     raise ExtractionError("Nomes de pasta esgotados para este arquivo.")
 
 
+def reserve_target(output, source):
+    """Reserva (ou reutiliza) a pasta de destino; exposta para retomada."""
+    return _target_folder(Path(output), Path(source))
+
+
 def _resolve_engine(source, engine):
     suffix = Path(source).suffix.lower()
     available = available_engines()
@@ -323,25 +329,30 @@ def probe(source, engine="auto", password=None, fast=False):
     return info
 
 
-def _extract_command(engine, source, target, password, fast):
+def _extract_command(engine, source, target, password, fast, resume=False):
     binary = engine_binary(engine)
     if binary is None:
         raise UnsupportedEngine(f"Motor '{engine}' nao encontrado.")
     args = _password_arg(engine, password)
     if engine == "7z":
-        command = [binary, "x", "-bso0", "-bsp1", "-y", "-mmt=on", f"-o{target}"]
+        overwrite = "-aos" if resume else "-y"
+        command = [binary, "x", "-bso0", "-bsp1", overwrite, "-mmt=on", f"-o{target}"]
         if not fast:
             command.append("-bb3")  # lista cada arquivo para contar os processados
         return [*command, *args, str(source)]
     if engine == "unzip":
-        command = [binary, "-o"]
+        command = [binary, "-n" if resume else "-o"]
         if fast:
             command.append("-q")
         return [*command, *args, str(source), "-d", str(target)]
     if engine == "unrar":
+        overwrite = "-o-" if resume else "-o+"
         flags = "-idq" if fast else "-idp"
-        return [binary, "x", "-o+", flags, *args, str(source), f"{target}/"]
-    return [binary, "-xf", str(source), "-C", str(target)]
+        return [binary, "x", overwrite, flags, *args, str(source), f"{target}/"]
+    command = [binary, "-xf", str(source), "-C", str(target)]
+    if resume:
+        command.insert(2, "-k")
+    return command
 
 
 def _line_is_item(engine, line):
@@ -395,16 +406,21 @@ def _remove_tree(path, cancel=None):
 
 
 def _extract_archive(source, output, engine, password, fast, entries,
-                     bytes_total, progress, log, cancel):
+                     bytes_total, progress, log, cancel, resume=False,
+                     target=None, pause=None):
     try:
         output.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise ExtractionError(f"Nao foi possivel criar/acessar {output}: {error}") from error
     ensure_writable(output)
 
-    target = _target_folder(output, source)
+    if target is None:
+        target = _target_folder(output, source)
+    else:
+        target = Path(target)
+        target.mkdir(parents=True, exist_ok=True)
 
-    command = _extract_command(engine, source, target, password, fast)
+    command = _extract_command(engine, source, target, password, fast, resume)
     log(f"Motor: {ENGINE_INFO.get(engine, engine)}")
     log(f"Origem: {source}")
     log(f"Destino: {target}")
@@ -541,10 +557,30 @@ def _extract_archive(source, output, engine, password, fast, entries,
         reader_out.start()
         reader_err.start()
 
+        if pause is None:
+            pause = threading.Event()
+            pause.set()
         while (reader_out.is_alive() or reader_err.is_alive()
                or not messages.empty() or process.poll() is None):
             if cancel.is_set():
                 raise ExtractionCancelled("Extracao cancelada.")
+            if not pause.is_set():
+                try:
+                    process.send_signal(signal.SIGSTOP)
+                except (OSError, ProcessLookupError):
+                    pass
+                while not pause.is_set():
+                    if cancel.is_set():
+                        try:
+                            process.send_signal(signal.SIGCONT)
+                        except (OSError, ProcessLookupError):
+                            pass
+                        raise ExtractionCancelled("Extracao cancelada.")
+                    pause.wait(0.2)
+                try:
+                    process.send_signal(signal.SIGCONT)
+                except (OSError, ProcessLookupError):
+                    pass
             if reader_errors:
                 raise ExtractionError(f"Falha ao acompanhar a extracao: {reader_errors[0]}")
             try:
@@ -593,7 +629,8 @@ def _extract_archive(source, output, engine, password, fast, entries,
 
 
 def extract(source, output, engine="auto", password=None, fast=False,
-            entries=0, bytes_total=0, progress=None, log=None, cancel=None):
+            entries=0, bytes_total=0, progress=None, log=None, cancel=None,
+            resume=False, target=None, pause=None):
     """Extrai um arquivo para output/<nome> e retorna a pasta criada."""
     source = Path(source).expanduser()
     output = Path(output).expanduser().resolve()
@@ -622,4 +659,5 @@ def extract(source, output, engine="auto", password=None, fast=False,
             source, output, progress=pkg_progress, log=log, cancel=cancel)
     return _extract_archive(
         source, output, resolved, password, fast, entries,
-        bytes_total, progress, log, cancel)
+        bytes_total, progress, log, cancel, resume=resume, target=target,
+        pause=pause)
