@@ -6,7 +6,7 @@ on:
       tag:
         description: "Tag da release (ex.: v1.0.0)"
         required: true
-        default: "v1.1.0"
+        default: "v1.2.0"
       release_name:
         description: "Nome da release"
         required: false
@@ -78,10 +78,12 @@ jobs:
           --hidden-import tkinterdnd2
           --collect-all tkinterdnd2
           app.py
+      - name: Renomeia binario macOS
+        run: mv dist/extrair-tudo dist/extrair-tudo-macos
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: dist/extrair-tudo
+          path: dist/extrair-tudo-macos
 
   release:
     needs: [build-linux, build-windows, build-macos]
@@ -106,4 +108,4 @@ jobs:
           files: |
             artifacts/linux/extrair-tudo
             artifacts/windows/extrair-tudo.exe
-            artifacts/macos/extrair-tudo
+            artifacts/macos/extrair-tudo-macos
