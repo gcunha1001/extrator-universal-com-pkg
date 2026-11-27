@@ -24,7 +24,7 @@ from core import ExtractionCancelled, ExtractionError
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, ttk
+    from tkinter import filedialog, messagebox, ttk
 except ImportError as error:
     raise SystemExit(
         "Tkinter não encontrado: instale python3-tk/tk."
@@ -342,7 +342,26 @@ class QueueTab:
             else:
                 self._log(f"Caminho inexistente: {path}")
                 continue
+            # Evita duplicar arquivos com o mesmo nome sem perguntar ao usuario.
+            to_add = []
+            duplicates = []
             for candidate in candidates:
+                if any(job["path"] == candidate
+                       or job["path"].name == candidate.name
+                       for job in self.jobs):
+                    duplicates.append(candidate)
+                else:
+                    to_add.append(candidate)
+            if duplicates:
+                names = sorted({candidate.name for candidate in duplicates})
+                sample = ", ".join(names[:5])
+                extra = f" e mais {len(names) - 5}" if len(names) > 5 else ""
+                if messagebox.askyesno(
+                        "Arquivo duplicado",
+                        f"Já existe na fila arquivo com o mesmo nome: "
+                        f"{sample}{extra}.\nAdicionar mesmo assim?"):
+                    to_add.extend(duplicates)
+            for candidate in to_add:
                 jobs.append(self._add_job(candidate))
         if not jobs:
             return

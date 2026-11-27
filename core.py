@@ -329,14 +329,15 @@ def _extract_command(engine, source, target, password, fast):
         raise UnsupportedEngine(f"Motor '{engine}' nao encontrado.")
     args = _password_arg(engine, password)
     if engine == "7z":
-        command = [binary, "x", "-bso0", "-bsp1", "-y", f"-o{target}"]
-        if fast:
-            command.append("-mmt=on")
-        else:
+        command = [binary, "x", "-bso0", "-bsp1", "-y", "-mmt=on", f"-o{target}"]
+        if not fast:
             command.append("-bb3")  # lista cada arquivo para contar os processados
         return [*command, *args, str(source)]
     if engine == "unzip":
-        return [binary, "-o", *args, str(source), "-d", str(target)]
+        command = [binary, "-o"]
+        if fast:
+            command.append("-q")
+        return [*command, *args, str(source), "-d", str(target)]
     if engine == "unrar":
         flags = "-idq" if fast else "-idp"
         return [binary, "x", "-o+", flags, *args, str(source), f"{target}/"]
@@ -363,7 +364,7 @@ def _verify_target(target, cancel=None):
                 raise ExtractionError(
                     f"O arquivo continha um link simbolico para fora do destino: {path.name}"
                 )
-            if checked % 500 == 0:
+            if checked % 1000 == 0:
                 time.sleep(0)  # ponto de espera cooperativo em pastas muito grandes
 
 
@@ -567,7 +568,8 @@ def _extract_archive(source, output, engine, password, fast, entries,
                 hint = " Se estiver protegido, informe a senha e tente novamente."
             raise ExtractionError(f"Falha na extracao: {detail}{hint}")
 
-        _verify_target(target, cancel)
+        if not fast:
+            _verify_target(target, cancel)
         report(100, max(entries, files_done[0]), force=True)
         success = True
         return target
