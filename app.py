@@ -644,10 +644,11 @@ class QueueTab:
         self._sync_buttons()
         self.cancel_button.configure(state="normal")
         self.pause_button.configure(state="normal", text="Pausar")
-        args = (output, engine, self.app.password_var.get(), self.app.fast_var.get())
+        args = (output, engine, self.app.password_var.get(), self.app.fast_var.get(),
+                self.app.verify_var.get())
         threading.Thread(target=self._worker, args=args, daemon=True).start()
 
-    def _worker(self, output, engine, password, fast):
+    def _worker(self, output, engine, password, fast, verify=False):
         if self.mode == "pkg":
             def _tracer(frame, event, arg):
                 while not self.pause_event.is_set():
@@ -720,7 +721,27 @@ class QueueTab:
                 job["resume_target"] = str(target)
             self._save_checkpoint(job, output, target, engine,
                                   password if self.mode == "files" else None,
-                                  fast)
+                                  fast, verify)
+            if verify:
+                self.ui(lambda: self._log(
+                    f"Verificando integridade: {job['path'].name}"))
+                self.ui(lambda: self._set_status(job, "Verificando"))
+                try:
+                    core.verify(
+                        job["path"], engine=engine,
+                        password=password if self.mode == "files" else None)
+                except Exception as error:
+                    self._clear_checkpoint()
+                    message = str(error)
+
+                    def failed_verify(j=job, m=message):
+                        j["error"] = m
+                        self._set_status(j, "Erro")
+                        self._update_summary(j)
+                        self._stop_eta()
+                        self._log(f"ERRO: {m}")
+                    self.ui(failed_verify)
+                    continue
             try:
                 result = core.extract(
                     job["path"], output,
@@ -810,7 +831,8 @@ class QueueTab:
             if self.current_job is not None:
                 self._update_summary(self.current_job)
 
-    def _save_checkpoint(self, job, output, target, engine, password, fast):
+    def _save_checkpoint(self, job, output, target, engine, password, fast,
+                         verify=False):
         try:
             CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
             data = [{
@@ -820,6 +842,7 @@ class QueueTab:
                 "engine": engine,
                 "password": password,
                 "fast": bool(fast),
+                "verify": bool(verify),
                 "mode": self.mode,
                 "entries": int(job.get("entries", 0) or 0),
                 "bytes": int(job.get("bytes", 0) or 0),
@@ -861,6 +884,7 @@ class App:
         self.output_var = tk.StringVar(value=str(default_output_dir()))
         self.password_var = tk.StringVar()
         self.fast_var = tk.BooleanVar(value=False)
+        self.verify_var = tk.BooleanVar(value=False)
 
         self._style()
         self._build()
@@ -925,6 +949,7 @@ class App:
         if password:
             self.password_var.set(password)
         self.fast_var.set(bool(item.get("fast", False)))
+        self.verify_var.set(bool(item.get("verify", False)))
         tab.running = True
         tab.cancel_event = threading.Event()
         tab.pause_event = threading.Event()
@@ -934,7 +959,7 @@ class App:
         if hasattr(tab, "pause_button"):
             tab.pause_button.configure(state="normal", text="Pausar")
         args = (output, tab.engine_var.get(), self.password_var.get(),
-                self.fast_var.get())
+                self.fast_var.get(), self.verify_var.get())
         threading.Thread(target=tab._worker, args=args, daemon=True).start()
 
     # ---------- interface ----------
@@ -1061,6 +1086,10 @@ class App:
         ttk.Checkbutton(options, text="Ultra rápida",
                         variable=self.fast_var).pack(side="left")
         ttk.Label(options, text="sem log detalhado e com multithread",
+                  style="Muted.TLabel").pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(options, text="Verificar integridade",
+                        variable=self.verify_var).pack(side="left", padx=(12, 0))
+        ttk.Label(options, text="testa antes de extrair",
                   style="Muted.TLabel").pack(side="left", padx=(8, 0))
 
         notebook = ttk.Notebook(content)

@@ -628,6 +628,47 @@ def _extract_archive(source, output, engine, password, fast, entries,
             _remove_tree(target, cancel)
 
 
+def verify(source, engine="auto", password=None):
+    """Testa a integridade do arquivo sem extraí-lo."""
+    source = Path(source).expanduser()
+    if not source.is_file():
+        raise ExtractionError(f"Arquivo de origem nao encontrado: {source}")
+    resolved = _resolve_engine(source, engine)
+    if resolved == "pkg":
+        try:
+            pkg_core().read_package(source)
+        except Exception as error:
+            raise ExtractionError(str(error)) from error
+        return
+    binary = engine_binary(resolved)
+    if binary is None:
+        raise UnsupportedEngine(f"Motor '{resolved}' nao encontrado.")
+    args = _password_arg(resolved, password)
+    if resolved == "7z":
+        command = [binary, "t", "-bso0", "-bsp0", *args, str(source)]
+    elif resolved == "unzip":
+        command = [binary, "-t", *args, str(source)]
+    elif resolved == "unrar":
+        command = [binary, "t", *args, str(source)]
+    elif resolved == "bsdtar":
+        command = [binary, "-tf", str(source)]
+    else:
+        return
+    try:
+        process = subprocess.run(
+            command, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as error:
+        raise ExtractionError(f"Falha ao testar o arquivo: {error}") from error
+    if process.returncode != 0:
+        detail = process.stdout.decode("utf-8", errors="replace").strip().splitlines()
+        detail = detail[-1] if detail else f"codigo {process.returncode}"
+        hint = ""
+        if any(word in detail.lower() for word in ("password", "encrypted", "wrong", "senha")):
+            hint = " Se estiver protegido, informe a senha e tente novamente."
+        raise ExtractionError(f"Falha na verificação: {detail}{hint}")
+
+
 def extract(source, output, engine="auto", password=None, fast=False,
             entries=0, bytes_total=0, progress=None, log=None, cancel=None,
             resume=False, target=None, pause=None):
