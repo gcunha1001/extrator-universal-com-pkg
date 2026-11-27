@@ -3,6 +3,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -310,6 +311,29 @@ class QueueTab:
         self._add_paths(paths)
 
     def _choose_files(self):
+        initial = str(Path(self.app.output_var.get()).expanduser())
+        if not Path(initial).is_dir():
+            initial = str(Path.home())
+        if shutil.which("kdialog"):
+            if self.mode == "files":
+                filter_text = (
+                    "*.zip *.zipx *.rar *.7z *.iso *.img *.tar *.gz *.tgz "
+                    "*.bz2 *.xz *.cab|Arquivos suportados\n*.*|Todos os arquivos")
+            else:
+                filter_text = "*.pkg|Arquivos PKG\n*.*|Todos os arquivos"
+            try:
+                result = subprocess.run(
+                    ["kdialog", "--multiple", "--separate-output",
+                     "--getopenfilename", initial, filter_text],
+                    capture_output=True, text=True)
+            except OSError:
+                result = None
+            if result is not None and result.returncode == 0:
+                paths = [line.strip() for line in result.stdout.splitlines()
+                         if line.strip()]
+                if paths:
+                    self._add_paths(paths)
+                return
         if self.mode == "files":
             filetypes = [
                 ("Arquivos e imagens",
@@ -915,9 +939,25 @@ class App:
             pass
 
     def _choose_output(self):
+        initial = str(Path(self.output_var.get()).expanduser())
+        if not Path(initial).is_dir():
+            initial = str(Path.home())
+        if shutil.which("kdialog"):
+            try:
+                result = subprocess.run(
+                    ["kdialog", "--getexistingdirectory", initial],
+                    capture_output=True, text=True)
+            except OSError:
+                result = None
+            if result is not None and result.returncode == 0:
+                chosen = result.stdout.strip()
+                if chosen:
+                    self.output_var.set(chosen)
+                    self._update_free_space()
+                    return
         chosen = filedialog.askdirectory(
             title="Escolha a pasta de destino",
-            initialdir=str(Path(self.output_var.get()).expanduser()) or str(Path.home()),
+            initialdir=initial,
             mustexist=False,
         )
         if chosen:
