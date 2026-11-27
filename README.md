@@ -114,6 +114,10 @@ extrator-universal-com-pkg/
 └── .gitignore
 ```
 
+## Contribuição
+
+Se o projeto te ajudou e quiser apoiar, Pix: **legal725@gmail.com**
+
 ## Licença
 
 Código e adaptações deste repositório: **GPL-3.0-only**. Parte do código foi adaptada de
