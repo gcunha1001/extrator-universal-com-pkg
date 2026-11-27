@@ -6,7 +6,7 @@ on:
       tag:
         description: "Tag da release (ex.: v1.0.0)"
         required: true
-        default: "v1.0.0"
+        default: "v1.1.0"
       release_name:
         description: "Nome da release"
         required: false
@@ -61,8 +61,30 @@ jobs:
           name: windows
           path: dist/extrair-tudo.exe
 
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instala PyInstaller
+        run: pip install pyinstaller
+      - name: Compila (macOS)
+        run: >
+          pyinstaller --onefile --windowed
+          --name extrair-tudo
+          --add-data "core.py:."
+          --hidden-import tkinterdnd2
+          --collect-all tkinterdnd2
+          app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/extrair-tudo
+
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -73,6 +95,10 @@ jobs:
         with:
           name: windows
           path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: artifacts/macos
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
@@ -80,3 +106,4 @@ jobs:
           files: |
             artifacts/linux/extrair-tudo
             artifacts/windows/extrair-tudo.exe
+            artifacts/macos/extrair-tudo
